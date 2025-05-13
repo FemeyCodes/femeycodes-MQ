@@ -1,7 +1,10 @@
 package queue
 
 import (
+	"bytes"
 	"container/heap"
+	"encoding/binary"
+	"encoding/gob"
 	"math"
 	"os"
 	"sync"
@@ -11,11 +14,13 @@ import (
 )
 
 type Queue struct {
-	name    string
-	heap    *priorityHeap
-	logFile *os.File
-	dlq     *DeadLetterQueue
-	mu      sync.RWMutex
+	name         string
+	heap         *priorityHeap
+	dlq          *DeadLetterQueue
+	mu           sync.RWMutex
+	logFile      *os.File
+	logPath      string
+	snapshotPath string
 }
 
 type DeadLetterQueue struct {
@@ -26,12 +31,29 @@ type DeadLetterQueue struct {
 }
 
 func NewQueue(name string, maxRetries int32, backoff time.Duration) *Queue {
-	return &Queue{
-		name:    name,
-		heap:    NewPriorityHeap(),
-		logFile: nil,
-		dlq:     NewDeadLetterQueue(maxRetries, backoff),
+	logPath := name + ".log"
+	snapshotPath := name + ".snapshot"
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic("Failed to open Log File: " + err.Error())
 	}
+	q := &Queue{
+		name:         name,
+		heap:         NewPriorityHeap(),
+		logFile:      logFile,
+		dlq:          NewDeadLetterQueue(maxRetries, backoff),
+		logPath:      logPath,
+		snapshotPath: snapshotPath,
+	}
+
+	if err := q.recover(); err != nil {
+		panic("Failed to recover queue: " + err.Error())
+	}
+
+	//Start Periodic SnapShotting
+	go q.startSnapShotting()
+
+	return q
 }
 
 func NewDeadLetterQueue(maxRetires int32, backoff time.Duration) *DeadLetterQueue {
@@ -71,6 +93,43 @@ func (q *Queue) HandleFailure(msg *message.Message) {
 		heap.Push(q.heap, msg)
 		q.mu.Unlock()
 	})
+}
+
+func (q *Queue) appendToLog(op string, message *message.Message) error {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(op)
+	if err != nil {
+		return err
+	}
+
+	err = enc.Encode(message)
+	if err != nil {
+		return err
+	}
+
+	data := buf.Bytes()
+	length := uint32(len(data))
+	lengthBuf := make([]byte, 4)
+	binary.BigEndian.AppendUint32(lengthBuf, length)
+
+	if _, err := q.logFile.Write(lengthBuf); err != nil {
+		return err
+	}
+
+	if _, err := q.logFile.Write(data); err != nil {
+		return err
+	}
+
+	return q.logFile.Sync()
+}
+
+func (q *Queue) startSnapShotting() error {
+	return nil
+}
+
+func (q *Queue) recover() error {
+	return nil
 }
 
 // Number of messages in DeadLetter Queue
