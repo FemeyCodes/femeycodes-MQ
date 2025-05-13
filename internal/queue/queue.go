@@ -153,6 +153,12 @@ func (q *Queue) recover() error {
 	return nil
 }
 
+func (q *Queue) Close() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.logFile.Close()
+}
+
 // Number of messages in DeadLetter Queue
 func (dlq *DeadLetterQueue) Size() int32 {
 	dlq.mu.RLock()
