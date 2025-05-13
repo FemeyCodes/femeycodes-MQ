@@ -66,11 +66,19 @@ func NewDeadLetterQueue(maxRetires int32, backoff time.Duration) *DeadLetterQueu
 
 func (q *Queue) Enqueue(payload []byte, priority int32, metadata map[string]string) *message.Message {
 	msg := q.heap.Enqueue(payload, priority, metadata)
+	err := q.appendToLog("enqueue", msg)
+	if err != nil {
+		panic("failed to append to log: " + err.Error())
+	}
 	return msg
 }
 
 func (q *Queue) Dequeue() *message.Message {
 	msg := q.heap.Dequeue()
+	err := q.appendToLog("dequeue", msg)
+	if err != nil {
+		panic("failed to append to log: " + err.Error())
+	}
 	return msg
 }
 
@@ -83,6 +91,11 @@ func (q *Queue) HandleFailure(msg *message.Message) {
 		q.dlq.mu.Lock()
 		heap.Push(q.dlq.queue, msg)
 		q.dlq.mu.Unlock()
+
+		if err := q.appendToLog("dlq", msg); err != nil {
+			panic("failed to append to log: " + err.Error())
+		}
+
 		return
 	}
 
@@ -92,7 +105,15 @@ func (q *Queue) HandleFailure(msg *message.Message) {
 		q.mu.Lock()
 		heap.Push(q.heap, msg)
 		q.mu.Unlock()
+
+		if err := q.appendToLog("retry", msg); err != nil {
+			panic("failed to append to log: " + err.Error())
+		}
 	})
+
+	if err := q.appendToLog("failure", msg); err != nil {
+		panic("failed to append to log: " + err.Error())
+	}
 }
 
 func (q *Queue) appendToLog(op string, message *message.Message) error {
