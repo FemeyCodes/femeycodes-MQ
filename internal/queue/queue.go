@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"encoding/binary"
 	"encoding/gob"
+	"fmt"
 	"math"
 	"os"
 	"sync"
@@ -185,7 +186,14 @@ func (q *Queue) takeSnapshot() error {
 }
 
 func (q *Queue) startSnapShotting() error {
+	ticker := time.NewTicker(time.Minute * time.Duration(30))
+	defer ticker.Stop()
 
+	for range ticker.C {
+		if err := q.takeSnapshot(); err != nil {
+			fmt.Println("Error Taking SnapShot:" + err.Error())
+		}
+	}
 	return nil
 }
 
