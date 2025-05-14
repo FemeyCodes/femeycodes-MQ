@@ -145,7 +145,47 @@ func (q *Queue) appendToLog(op string, message *message.Message) error {
 	return q.logFile.Sync()
 }
 
+func (q *Queue) takeSnapshot() error {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	tempFile, err := os.CreateTemp("", "snapshot-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	messages := make([]*message.Message, 0, q.heap.Len())
+	tempHeap := &priorityHeap{items: make([]*message.Message, len(q.heap.items))}
+	copy(tempHeap.items, q.heap.items)
+	for tempHeap.Len() > 0 {
+		msg := heap.Pop(tempHeap).(*message.Message)
+		messages = append(messages, msg)
+	}
+
+	err = enc.Encode(messages)
+	if err != nil {
+		return err
+	}
+
+	_, err = tempFile.Write(buf.Bytes())
+	if err != nil {
+		return err
+	}
+
+	err = tempFile.Sync()
+	if err != nil {
+		return err
+	}
+
+	return os.Rename(tempFile.Name(), q.snapshotPath)
+
+}
+
 func (q *Queue) startSnapShotting() error {
+
 	return nil
 }
 
