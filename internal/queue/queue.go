@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -198,6 +199,87 @@ func (q *Queue) startSnapShotting() error {
 }
 
 func (q *Queue) recover() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	_, err := os.Stat(q.snapshotPath)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Open(q.snapshotPath)
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	var messages []*message.Message
+
+	dec := gob.NewDecoder(file)
+	err = dec.Decode(messages)
+	if err != nil {
+		return err
+	}
+
+	for _, msg := range messages {
+		heap.Push(q.heap, msg)
+	}
+
+	logFile, err := os.Open(q.logPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	defer logFile.Close()
+	if logFile != nil {
+		for {
+			lengthBuf := make([]byte, 4)
+			_, err := logFile.Read(lengthBuf)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
+
+			length := binary.BigEndian.Uint32(lengthBuf)
+			data := make([]byte, length)
+			_, err = logFile.Read(data)
+			if err != nil {
+				return err
+			}
+
+			buf := bytes.NewReader(data)
+			dec := gob.NewDecoder(buf)
+
+			var op string
+			err = dec.Decode(&op)
+			if err != nil {
+				return err
+			}
+
+			var msg message.Message
+			err = dec.Decode(&msg)
+			if err != nil {
+				return err
+			}
+
+			switch op {
+			case "enqueue":
+				heap.Push(q.heap, &msg)
+
+			case "dequeue":
+
+			case "failure", "retry":
+
+			case "dlq":
+
+			}
+
+		}
+	}
+
 	return nil
 }
 
