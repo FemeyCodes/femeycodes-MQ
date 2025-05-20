@@ -23,6 +23,8 @@ type Queue struct {
 	logFile      *os.File
 	logPath      string
 	snapshotPath string
+	processedIDs map[string]bool
+	messageIndex map[string]message.Message
 }
 
 type DeadLetterQueue struct {
@@ -46,7 +48,8 @@ func NewQueue(name string, maxRetries int32, backoff time.Duration) *Queue {
 		dlq:          NewDeadLetterQueue(maxRetries, backoff),
 		logPath:      logPath,
 		snapshotPath: snapshotPath,
-	}
+		processedIDs: make(map[string]bool),
+		messageIndex: make(map[string]message.Message)}
 
 	if err := q.recover(); err != nil {
 		panic("Failed to recover queue: " + err.Error())
@@ -68,6 +71,7 @@ func NewDeadLetterQueue(maxRetires int32, backoff time.Duration) *DeadLetterQueu
 
 func (q *Queue) Enqueue(payload []byte, priority int32, metadata map[string]string) *message.Message {
 	msg := q.heap.Enqueue(payload, priority, metadata)
+	q.messageIndex[msg.ID] = *msg
 	err := q.appendToLog("enqueue", msg)
 	if err != nil {
 		panic("failed to append to log: " + err.Error())
@@ -77,6 +81,8 @@ func (q *Queue) Enqueue(payload []byte, priority int32, metadata map[string]stri
 
 func (q *Queue) Dequeue() *message.Message {
 	msg := q.heap.Dequeue()
+	q.processedIDs[msg.ID] = true
+	delete(q.messageIndex, msg.ID)
 	err := q.appendToLog("dequeue", msg)
 	if err != nil {
 		panic("failed to append to log: " + err.Error())
@@ -167,7 +173,17 @@ func (q *Queue) takeSnapshot() error {
 		messages = append(messages, msg)
 	}
 
-	err = enc.Encode(messages)
+	type Snapshot struct {
+		Messages     []*message.Message
+		ProcessedIDs map[string]bool
+	}
+
+	snapshot := Snapshot{
+		Messages:     messages,
+		ProcessedIDs: q.processedIDs,
+	}
+
+	err = enc.Encode(snapshot)
 	if err != nil {
 		return err
 	}
@@ -214,18 +230,29 @@ func (q *Queue) recover() error {
 
 	defer file.Close()
 
-	var messages []*message.Message
+	type Snapshot struct {
+		Messages     []*message.Message
+		ProcessedIDs map[string]bool
+	}
+
+	var snapshot Snapshot
 
 	dec := gob.NewDecoder(file)
-	err = dec.Decode(messages)
+	err = dec.Decode(&snapshot)
 	if err != nil {
 		return err
 	}
 
-	for _, msg := range messages {
-		heap.Push(q.heap, msg)
+	for _, msg := range snapshot.Messages {
+		if !snapshot.ProcessedIDs[msg.ID] {
+			heap.Push(q.heap, msg)
+			q.messageIndex[msg.ID] = *msg
+		}
 	}
 
+	q.processedIDs = snapshot.ProcessedIDs
+
+	//Replay Log
 	logFile, err := os.Open(q.logPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -259,6 +286,16 @@ func (q *Queue) recover() error {
 				return err
 			}
 
+			if op == "dequeue" {
+				var msgID string
+				if err := dec.Decode(&msgID); err != nil {
+					return err
+				}
+				q.processedIDs[msgID] = true
+				delete(q.messageIndex, msgID)
+				continue
+			}
+
 			var msg message.Message
 			err = dec.Decode(&msg)
 			if err != nil {
@@ -267,14 +304,21 @@ func (q *Queue) recover() error {
 
 			switch op {
 			case "enqueue":
-				heap.Push(q.heap, &msg)
-
-			case "dequeue":
+				if !q.processedIDs[msg.ID] {
+					heap.Push(q.heap, &msg)
+					q.messageIndex[msg.ID] = msg
+				}
 
 			case "failure", "retry":
-
+				if m, exists := q.messageIndex[msg.ID]; exists {
+					m.RetryCount = msg.RetryCount
+				}
 			case "dlq":
-
+				if !q.processedIDs[msg.ID] {
+					q.dlq.mu.Lock()
+					heap.Push(q.dlq.queue, &msg)
+					q.dlq.mu.Unlock()
+				}
 			}
 
 		}
