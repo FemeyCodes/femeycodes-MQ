@@ -1,7 +1,10 @@
 package fmqp
 
 import (
+	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/FemeyCodes/femeycodes-MQ/internal/queue"
@@ -43,5 +46,53 @@ func (s *Server) Start() error {
 
 func (s *Server) handleClient(conn net.Conn) {
 	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	for {
+		opCode, err := reader.ReadByte()
+		if err != nil {
+			if err != io.EOF {
+				fmt.Printf("Read Error: %v \n", err)
+			}
+			return
+		}
+
+		var length uint32
+		err = binary.Read(reader, binary.BigEndian, &length)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Printf("Read error: %v \n", err)
+			}
+
+		}
+
+		//Read Payload
+		payload := make([]byte, length)
+		_, err = io.ReadFull(reader, payload)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Printf("Read error: %v \n", err)
+			}
+
+		}
+
+		switch opCode {
+		case 0x01: //ENQUEUE
+
+		case 0x02: //DEQUEUE
+
+		case 0x03: //ACK
+
+		case 0x04: //NACK
+
+		case 0x05: //RETRIECE DLQ
+
+		case 0x06: //CLEAR DLQ
+
+		default:
+			//Write Error here
+		}
+
+	}
 
 }
