@@ -169,3 +169,29 @@ func (s *Server) handleEnqueue(conn net.Conn, payload []byte) {
 	s.writeSuccess(conn, nil)
 
 }
+
+func (s *Server) handleDequeue(conn net.Conn) {
+	msg := s.queue.Dequeue()
+	if msg == nil {
+		s.writeSuccess(conn, nil)
+		return
+	}
+
+	var buf bytes.Buffer
+	binary.Write(conn, binary.BigEndian, uint32(len(msg.ID)))
+	buf.WriteString(msg.ID)
+	binary.Write(&buf, binary.BigEndian, uint32(len(msg.Payload)))
+	buf.Write(msg.Payload)
+	binary.Write(&buf, binary.BigEndian, int32(msg.Priority))
+	binary.Write(&buf, binary.BigEndian, msg.Timestamp.UnixNano())
+	binary.Write(&buf, binary.BigEndian, int32(msg.RetryCount))
+	binary.Write(&buf, binary.BigEndian, uint32(len(msg.Metadata)))
+	for k, v := range msg.Metadata {
+		binary.Write(&buf, binary.BigEndian, uint32(len(k)))
+		buf.WriteString(k)
+		binary.Write(&buf, binary.BigEndian, uint32(len(v)))
+		buf.WriteString(v)
+	}
+
+	s.writeSuccess(conn, buf.Bytes())
+}
