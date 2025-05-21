@@ -2,6 +2,7 @@ package fmqp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -109,4 +110,62 @@ func (s *Server) writeSuccess(conn net.Conn, payload []byte) {
 	conn.Write([]byte{0x00})
 	binary.Write(conn, binary.BigEndian, uint32(len(payload)))
 	conn.Write(payload)
+}
+
+func (s *Server) handleEnqueue(conn net.Conn, payload []byte) {
+	reader := bytes.NewReader(payload)
+	var payloadLen uint32
+	err := binary.Read(reader, binary.BigEndian, &payloadLen)
+	if err != nil {
+		s.writeError(conn, "invalid payload length")
+		return
+	}
+
+	payLoadData := make([]byte, payloadLen)
+	_, err = io.ReadFull(reader, payLoadData)
+	if err != nil {
+		s.writeError(conn, "invalid payload data")
+		return
+	}
+
+	var priority int32
+	err = binary.Read(reader, binary.BigEndian, priority)
+	if err != nil {
+		s.writeError(conn, "invalid priority received")
+		return
+	}
+
+	var metadataCount uint32
+	if err := binary.Read(reader, binary.BigEndian, &metadataCount); err != nil {
+		s.writeError(conn, "invalid metadata count")
+		return
+	}
+	metadata := make(map[string]string)
+	for i := uint32(0); i < metadataCount; i++ {
+		var keyLen uint32
+		if err := binary.Read(reader, binary.BigEndian, &keyLen); err != nil {
+			s.writeError(conn, "invalid key length")
+			return
+		}
+		key := make([]byte, keyLen)
+		if _, err := io.ReadFull(reader, key); err != nil {
+			s.writeError(conn, "invalid key data")
+			return
+		}
+		var valueLen uint32
+		if err := binary.Read(reader, binary.BigEndian, &valueLen); err != nil {
+			s.writeError(conn, "invalid value length")
+			return
+		}
+		value := make([]byte, valueLen)
+		if _, err := io.ReadFull(reader, value); err != nil {
+			s.writeError(conn, "invalid value data")
+			return
+		}
+		metadata[string(key)] = string(value)
+	}
+
+	s.queue.Enqueue(payLoadData, priority, metadata)
+	s.writeSuccess(conn, nil)
+
 }
