@@ -91,8 +91,22 @@ func (s *Server) handleClient(conn net.Conn) {
 
 		default:
 			//Write Error here
+			s.writeError(conn, fmt.Sprintf("Cannot identify type of request, Unknown opCode recieved: %x ", opCode))
 		}
 
 	}
 
+}
+
+func (s *Server) writeError(conn net.Conn, msg string) {
+	payload := []byte(msg)
+	conn.Write([]byte{0xFF})
+	binary.Write(conn, binary.BigEndian, payload)
+	conn.Write(payload)
+}
+
+func (s *Server) writeSuccess(conn net.Conn, payload []byte) {
+	conn.Write([]byte{0x00})
+	binary.Write(conn, binary.BigEndian, uint32(len(payload)))
+	conn.Write(payload)
 }
